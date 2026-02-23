@@ -22,20 +22,23 @@ It is designed to be reused across multiple services and repositories.
 
 ## 🔧 Key Features
 
-- 🔁 **Digest-based deployment**  
+- 🔁 **Digest-based deployment**
   Ensures reproducible and rollback-friendly deployments.
 
-- 🔐 **Image signing with Cosign**  
+- 🔐 **Image signing with Cosign**
   Adds a security layer to published images.
 
-- 🚀 **Remote deployment via SSH + Docker Compose**  
+- 🚀 **Remote deployment via SSH + Docker Compose**
   No Kubernetes required. Simple, explicit, and transparent.
 
-- 🧪 **Dry-run mode**  
+- 🧪 **Dry-run mode**
   Run the entire pipeline without pushing or deploying artifacts.
 
-- 📦 **Service-oriented design**  
+- 📦 **Service-oriented design**
   One action, many services.
+
+- 🗂 **Monorepo support**
+  Point the build at any subdirectory with `context` and `dockerfile` inputs.
 
 
 ## 🗂 Expected docker-compose.yml & .env Structure
@@ -124,19 +127,61 @@ jobs:
           ssh-key: ${{ secrets.SSH_KEY }}
 ```
 
+### Monorepo Example
+
+```yaml
+jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: your-org/docker-service-cd@v1
+        with:
+          context: frontend        # uses frontend/Dockerfile by default
+          registry: ghcr.io/your-org/repo-frontend
+          service-name: frontend
+          ssh-host: ${{ secrets.SSH_HOST }}
+          ssh-user: ${{ secrets.SSH_USER }}
+          ssh-key: ${{ secrets.SSH_KEY }}
+
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: your-org/docker-service-cd@v1
+        with:
+          context: backend         # uses backend/Dockerfile by default
+          registry: ghcr.io/your-org/repo-backend
+          service-name: backend
+          ssh-host: ${{ secrets.SSH_HOST }}
+          ssh-user: ${{ secrets.SSH_USER }}
+          ssh-key: ${{ secrets.SSH_KEY }}
+```
+
+### Custom Dockerfile Path
+
+```yaml
+with:
+  context: backend
+  dockerfile: backend/Dockerfile.prod   # explicit override
+  registry: ghcr.io/your-org/repo-backend
+  service-name: backend
+  ...
+```
+
 
 ## ⚙️ Inputs
 
-| Name           | Required | Default | Description                                            |
-| -------------- | -------- | ------- | ------------------------------------------------------ |
-| `skip-checkout` | ❌        | `false` | Skip the repository checkout step                      |
-| `dry-run`      | ❌        | `false` | Run pipeline without pushing or deploying              |
-| `registry`     | ✅*       | —       | Image name (e.g. `ghcr.io/user/repo`)                  |
-| `service-name` | ✅*       | —       | Docker Compose service name                            |
-| `ssh-host`     | ✅*       | —       | SSH host for deployment                                |
-| `ssh-user`     | ✅*       | —       | SSH username                                           |
-| `ssh-key`      | ✅*       | —       | Private SSH key                                        |
-| `ssh-port`     | ❌        | `22`    | SSH port                                               |
+| Name            | Required | Default | Description                                                                        |
+| --------------- | -------- | ------- | ---------------------------------------------------------------------------------- |
+| `skip-checkout` | ❌        | `false` | Skip the repository checkout step                                                  |
+| `dry-run`       | ❌        | `false` | Run pipeline without pushing or deploying                                          |
+| `registry`      | ✅*       | —       | Image name (e.g. `ghcr.io/user/repo`)                                              |
+| `service-name`  | ✅*       | —       | Docker Compose service name                                                        |
+| `ssh-host`      | ✅*       | —       | SSH host for deployment                                                            |
+| `ssh-user`      | ✅*       | —       | SSH username                                                                       |
+| `ssh-key`       | ✅*       | —       | Private SSH key                                                                    |
+| `ssh-port`      | ❌        | `22`    | SSH port                                                                           |
+| `context`       | ❌        | `.`     | Docker build context path (e.g. `frontend`, `backend`)                             |
+| `dockerfile`    | ❌        | —       | Path to Dockerfile. Defaults to `{context}/Dockerfile` when not set.              |
 
 ✅* Required when `dry-run` is not `true`. In `dry-run` mode these inputs may be omitted.
 
