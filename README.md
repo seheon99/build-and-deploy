@@ -167,6 +167,19 @@ with:
   ...
 ```
 
+### Build Args
+
+```yaml
+with:
+  context: frontend
+  registry: ghcr.io/your-org/repo-frontend
+  service-name: frontend
+  build-args: |
+    NODE_ENV=production
+    API_BASE_URL=https://api.example.com
+  ...
+```
+
 
 ## ⚙️ Inputs
 
@@ -182,6 +195,7 @@ with:
 | `ssh-port`      | ❌        | `22`    | SSH port                                                                           |
 | `context`       | ❌        | `.`     | Docker build context path (e.g. `frontend`, `backend`)                             |
 | `dockerfile`    | ❌        | —       | Path to Dockerfile. Defaults to `{context}/Dockerfile` when not set.              |
+| `build-args`    | ❌        | —       | Build-time variables passed to `docker/build-push-action`, one `KEY=VALUE` per line. |
 
 ✅* Required when `dry-run` is not `true`. In `dry-run` mode these inputs may be omitted.
 
