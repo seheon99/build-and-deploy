@@ -66,7 +66,7 @@ runs:
         fi
 
     - if: inputs.skip-checkout != 'true'
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     - uses: docker/setup-buildx-action@v4
 
@@ -77,7 +77,8 @@ runs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
 
-    - id: meta
+    - if: inputs.dry-run != 'true'
+      id: meta
       uses: docker/metadata-action@v6
       with:
         images: ${{ inputs.registry }}
