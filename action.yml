@@ -95,7 +95,7 @@ runs:
         cache-to: type=gha,mode=max
 
     - if: inputs.dry-run != 'true'
-      uses: sigstore/cosign-installer@v4
+      uses: sigstore/cosign-installer@v4.1.2
 
     - name: Sign the published Docker image (skip on dry-run)
       if: inputs.dry-run != 'true'
