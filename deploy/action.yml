@@ -85,6 +85,7 @@ runs:
         VARIABLE=$(echo "$SERVICE_NAME" | tr '[:lower:]-' '[:upper:]_' | sed 's/_\+/_/g')
         echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
         echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
+        echo "service_name=$SERVICE_NAME" >> "$GITHUB_OUTPUT"
         echo "variable=$VARIABLE" >> "$GITHUB_OUTPUT"
         # Encode paths so quotes and shell metacharacters remain data in the SSH script.
         for key in WORKING_DIRECTORY COMPOSE_FILE ENV_FILE; do
@@ -110,17 +111,37 @@ runs:
           ENV_FILE=$(printf '%s' '${{ steps.image.outputs.env_file }}' | base64 -d)
           cd -- "$WORKING_DIRECTORY"
           test -f "$ENV_FILE"
+          DIGEST_KEY='${{ steps.image.outputs.variable }}_IMAGE_DIGEST'
+          if ! grep -q -- "^${DIGEST_KEY}=" "$ENV_FILE"; then
+            echo "Missing required digest variable: $DIGEST_KEY" >&2
+            exit 1
+          fi
+          CANDIDATE=$(mktemp -- "${ENV_FILE}.XXXXXX")
+          trap 'rm -f -- "$CANDIDATE"' EXIT
+          trap 'exit 1' HUP INT TERM
+          cp -p -- "$ENV_FILE" "$CANDIDATE"
           for entry in '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}'; do
             key=${entry%%=*}
-            if grep -q -- "^${key}=" "$ENV_FILE"; then
-              sed -i "s|^${key}=.*|${entry}|" -- "$ENV_FILE"
+            if grep -q -- "^${key}=" "$CANDIDATE"; then
+              sed -i "s|^${key}=.*|${entry}|" -- "$CANDIDATE"
             else
-              printf '\n%s\n' "$entry" >> "$ENV_FILE"
+              printf '\n%s\n' "$entry" >> "$CANDIDATE"
             fi
           done
-          set -- docker compose --env-file "$ENV_FILE"
+          # Candidate values take precedence over stale SSH environment variables.
+          set -- env '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' \
+            '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}' \
+            docker compose --env-file "$CANDIDATE"
           if [ -n "$COMPOSE_FILE" ]; then
             set -- "$@" -f "$COMPOSE_FILE"
           fi
-          "$@" pull '${{ inputs.service-name }}'
-          "$@" up -d --no-deps --no-build '${{ inputs.service-name }}'
+          "$@" config --quiet
+          mv -f -- "$CANDIDATE" "$ENV_FILE"
+          set -- env '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' \
+            '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}' \
+            docker compose --env-file "$ENV_FILE"
+          if [ -n "$COMPOSE_FILE" ]; then
+            set -- "$@" -f "$COMPOSE_FILE"
+          fi
+          "$@" pull '${{ steps.image.outputs.service_name }}'
+          "$@" up -d --no-deps --no-build '${{ steps.image.outputs.service_name }}'
