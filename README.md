@@ -87,12 +87,11 @@ the requested image in `.env` for retry.
 
 ### Custom remote paths
 
-Add these to the deploy step's `with`:
-
 ```yaml
-deploy-directory: /srv/portfolio
-compose-file: config/compose.production.yml
-env-file: config/production.env
+with:
+  deploy-directory: /srv/portfolio
+  compose-file: config/compose.production.yml
+  env-file: config/production.env
 ```
 
 Relative file paths resolve from `deploy-directory` (itself relative to the
