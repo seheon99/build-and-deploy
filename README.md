@@ -1,11 +1,8 @@
 # Docker Service CD
 
-Build and sign Docker images in GHCR, then deploy them independently via
-Docker Compose over SSH. Deployment retries reuse the published digest.
+Build and sign Docker images in GHCR, then deploy them via Docker Compose over SSH.
 
 ## Usage
-
-Pin actions to a reviewed commit SHA in production.
 
 ```yaml
 name: Build and deploy
@@ -19,109 +16,68 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write # Cosign keyless signing
+      id-token: write
     outputs:
       image: ${{ steps.build.outputs.image }}
-      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: seheon99/build-and-deploy/build@main
+      - uses: seheon99/build-and-deploy/build@v1.5.0
         id: build
         with:
-          registry: ghcr.io/your-org/your-service
-          # Optional: context, dockerfile, build-args, skip-checkout
+          registry: ghcr.io/your-org/your-app
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: seheon99/build-and-deploy/deploy@main
+      - uses: seheon99/build-and-deploy/deploy@v1.5.0
         with:
           image: ${{ needs.build.outputs.image }}
-          service-name: portfolio
+          service-name: app
           ssh-host: ${{ secrets.SSH_HOST }}
           ssh-user: ${{ secrets.SSH_USER }}
           ssh-key: ${{ secrets.SSH_KEY }}
+          working-directory: /srv/app
 ```
 
-Build exposes `image` (`repository@sha256:…`) and `digest` (`sha256:…`).
-Instead of `image`, deploy also accepts:
-
-```yaml
-registry: ghcr.io/your-org/your-service
-digest: ${{ needs.build.outputs.digest }}
-```
-
-Retry only the failed deploy job to avoid rebuilding. For a later deployment
-or rollback, call `/deploy` with the registry and a previously published digest.
-Mutable tags are not accepted.
+Build outputs `image` (`repository@sha256:…`) and `digest` (`sha256:…`).
+Retry the deploy job without rebuilding, or deploy a previously published digest.
+Pin actions to a reviewed commit SHA in production.
 
 ## Inputs
 
 | Action | Required | Optional (default) |
 | --- | --- | --- |
 | `/build` | `registry` | `context` (`.`), `dockerfile` (`{context}/Dockerfile`), `build-args` (newline-separated), `skip-checkout` (`false`) |
-| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `working-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
+| `/deploy` | `image` or `registry` + `digest`, `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `working-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
 
-Both accept `dry-run: "true"` without required inputs. Build still builds,
-but skips pushing and signing and leaves outputs empty. Deploy skips SSH.
+Both accept `dry-run: "true"` (default: `false`). Build skips pushing and signing and returns empty outputs; deploy skips SSH.
 
-## Server setup
+## Server Setup
 
-By default, the SSH user's working directory must contain a Compose file and `.env`.
-Authenticate the server to GHCR beforehand for private images.
+Install Docker with Compose and authenticate to GHCR for private images.
+Create the deployment directory with a Compose file and an environment file.
+
+`compose.yaml`
 
 ```yaml
 services:
-  portfolio:
-    image: ${PORTFOLIO_IMAGE}
+  app:
+    image: ghcr.io/your-org/your-app@${APP_IMAGE_DIGEST}
 ```
 
-Deploy sets `PORTFOLIO_IMAGE` and `PORTFOLIO_IMAGE_DIGEST` in `.env`, pulls,
-and runs `docker compose up -d --no-deps --no-build portfolio`.
-Service names map to uppercase variables with hyphens replaced by underscores.
-Names may contain letters, numbers, `_`, and `-`, starting with a letter or number.
-Existing Compose files using `repository@${PORTFOLIO_IMAGE_DIGEST}` still work
-when the repository matches the deployed image. Failed deployments retain
-the requested image in `.env` for retry.
+`.env`
 
-### Custom remote paths
-
-```yaml
-with:
-  working-directory: /srv/portfolio
-  compose-file: config/compose.production.yml
-  env-file: config/production.env
+```dotenv
+APP_IMAGE_DIGEST=
 ```
 
-Relative file paths resolve from `working-directory` (itself relative to the
-SSH login directory unless absolute). The directory and env file must exist.
-Omit `compose-file` for default discovery. Paths inside Compose files follow
-normal Compose rules. Store private paths in GitHub Secrets; the action also
-masks their encoded forms in logs.
+The digest variable must already exist, even for the first deployment.
+The action updates both `APP_IMAGE_DIGEST` and `APP_IMAGE` (the full image reference).
+Service names are uppercased, with hyphens converted to underscores and consecutive underscores collapsed.
 
-## Compatibility
+For custom paths, set `working-directory`, `compose-file`, and `env-file`.
+Relative file paths resolve from `working-directory`, which is relative to the SSH login directory unless absolute.
 
-The root action remains the legacy combined build/sign/deploy action with
-unchanged inputs and behavior. To migrate, use `/build` and `/deploy` in
-separate jobs and pass outputs as above. Existing digest-based Compose
-files need no changes. Older release tags do not contain the new sub-actions.
-
-## Tests
-
-With Python 3 and PyYAML installed:
-`python3 -m unittest discover -s tests`.
-
-### Remote deployment validation
-
-Both deployment entry points require the target `<SERVICE>_IMAGE_DIGEST` assignment
-in the existing environment file. A missing variable fails deployment explicitly.
-The action updates a temporary copy next to that file and runs
-`docker compose --env-file <candidate> config --quiet` before replacing the original.
-Validation failure leaves the original file intact and removes the temporary copy.
-Only after validation succeeds does the action replace the file, pull the image,
-and update the target service. Remote command failures fail the Actions job.
-A pull or service update failure after validation does not roll back the environment
-file or running containers.
-
-Run the regression tests with `python3 -m unittest discover -s tests` (requires PyYAML).
+Deployment validates the updated Compose configuration before replacing the environment file, then pulls and starts the target service.
+Failures after validation do not roll back the environment file.
