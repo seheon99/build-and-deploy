@@ -1,0 +1,95 @@
+name: Deploy published Docker image
+description: Deploy a published image by digest via Docker Compose over SSH, without building.
+
+inputs:
+  image:
+    required: false
+    description: Immutable image reference (repository@sha256:digest)
+  registry:
+    required: false
+    description: Image repository; required with digest when image is omitted
+  digest:
+    required: false
+    description: Published sha256 digest; required with registry when image is omitted
+  service-name:
+    required: false
+    description: Docker Compose service name; required unless dry-run is true
+  ssh-host:
+    required: false
+    description: SSH host; required unless dry-run is true
+  ssh-user:
+    required: false
+    description: SSH user; required unless dry-run is true
+  ssh-key:
+    required: false
+    description: SSH private key; required unless dry-run is true
+  ssh-port:
+    required: false
+    default: "22"
+    description: SSH port
+  dry-run:
+    required: false
+    default: "false"
+    description: Skip input validation and SSH deployment
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve and validate published image
+      id: image
+      if: inputs.dry-run != 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        REGISTRY: ${{ inputs.registry }}
+        DIGEST: ${{ inputs.digest }}
+        SERVICE_NAME: ${{ inputs.service-name }}
+        SSH_HOST: ${{ inputs.ssh-host }}
+        SSH_USER: ${{ inputs.ssh-user }}
+        SSH_KEY: ${{ inputs.ssh-key }}
+      run: |
+        if [[ -z "$IMAGE" ]]; then
+          IMAGE="${REGISTRY}@${DIGEST}"
+        elif [[ ( -n "$REGISTRY" && "$REGISTRY" != "${IMAGE%@*}" ) ||
+                ( -n "$DIGEST" && "$DIGEST" != "${IMAGE##*@}" ) ]]; then
+          echo 'image conflicts with registry or digest' >&2
+          exit 1
+        fi
+        if [[ ! "$IMAGE" =~ ^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$ ]]; then
+          echo 'Provide image as repository@sha256:digest, or registry and digest' >&2
+          exit 1
+        fi
+        if [[ ! "$SERVICE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+          echo 'Provide a valid Docker Compose service-name' >&2
+          exit 1
+        fi
+        if [[ -z "$SSH_HOST" || -z "$SSH_USER" || -z "$SSH_KEY" ]]; then
+          echo 'ssh-host, ssh-user, and ssh-key are required' >&2
+          exit 1
+        fi
+        VARIABLE=$(echo "$SERVICE_NAME" | tr '[:lower:]-' '[:upper:]_' | sed 's/_\+/_/g')
+        echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+        echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
+        echo "variable=$VARIABLE" >> "$GITHUB_OUTPUT"
+
+    - name: Deploy over SSH
+      if: inputs.dry-run != 'true'
+      uses: appleboy/ssh-action@v1.2.5
+      with:
+        host: ${{ inputs.ssh-host }}
+        username: ${{ inputs.ssh-user }}
+        key: ${{ inputs.ssh-key }}
+        port: ${{ inputs.ssh-port }}
+        script: |
+          set -eu
+          test -f .env
+          for entry in '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}'; do
+            key=${entry%%=*}
+            if grep -q "^${key}=" .env; then
+              sed -i "s|^${key}=.*|${entry}|" .env
+            else
+              printf '\n%s\n' "$entry" >> .env
+            fi
+          done
+          docker compose pull '${{ inputs.service-name }}'
+          docker compose up -d --no-deps --no-build '${{ inputs.service-name }}'
