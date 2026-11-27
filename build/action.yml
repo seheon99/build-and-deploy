@@ -1,0 +1,106 @@
+name: Build and sign Docker image
+description: Build, push to GHCR, and sign a Docker image independently of deployment.
+
+inputs:
+  skip-checkout:
+    required: false
+    default: "false"
+    description: >
+      Skip the repository checkout step;
+      assumes the caller already checked out the repo and prepared the workspace
+  dry-run:
+    required: false
+    default: "false"
+    description: Run pipeline without pushing or deploying artifacts
+
+  registry:
+    required: false
+    description: Image name (e.g. ghcr.io/user/repo)
+  context:
+    required: false
+    default: "."
+    description: Docker build context path (e.g. frontend, backend)
+  dockerfile:
+    required: false
+    default: ""
+    description: >
+      Path to Dockerfile. Defaults to {context}/Dockerfile when not set.
+  build-args:
+    required: false
+    default: ""
+    description: >
+      List of build-time variables passed to docker/build-push-action,
+      one KEY=VALUE per line.
+
+outputs:
+  image:
+    description: Immutable image reference (empty in dry-run mode)
+    value: ${{ steps.image.outputs.image }}
+  digest:
+    description: Published image digest (empty in dry-run mode)
+    value: ${{ steps.image.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate image name
+      if: inputs.dry-run != 'true'
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        if [[ -z "$REGISTRY" ]]; then
+          echo 'Missing required input: registry' >&2
+          exit 1
+        fi
+
+    - if: inputs.skip-checkout != 'true'
+      uses: actions/checkout@v7
+
+    - uses: docker/setup-buildx-action@v4
+
+    - if: inputs.dry-run != 'true'
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - id: meta
+      uses: docker/metadata-action@v6
+      with:
+        images: ${{ inputs.registry }}
+
+    - id: build
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
+        build-args: ${{ inputs.build-args }}
+        push: ${{ inputs.dry-run != 'true' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - if: inputs.dry-run != 'true'
+      uses: sigstore/cosign-installer@v4.1.2
+
+    - name: Sign the published Docker image (skip on dry-run)
+      if: inputs.dry-run != 'true'
+      env:
+        IMAGE: ${{ inputs.registry }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      shell: bash
+      run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+    - name: Export published image
+      id: image
+      if: inputs.dry-run != 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.registry }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        echo "image=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+        echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"

@@ -1,237 +1,98 @@
 # Docker Service CD
 
-A reusable GitHub Action to manage **service-level Docker Continuous Delivery**.
+Build and sign Docker images in GHCR, then deploy them independently via
+Docker Compose over SSH. Deployment retries reuse the published digest.
 
-This action builds and signs Docker images, then deploys running services
-remotely via **Docker Compose over SSH**, using **image digests** for safe and
-reproducible rollouts.
+## Usage
 
-
-## ✨ What this Action Does
-
-This action encapsulates a complete Docker-based CD workflow:
-
-1. **Build Docker images** using Buildx with cache support
-2. **Push images to a registry** (GHCR)
-3. **Sign images with Cosign** for supply-chain security
-4. **Update running services** on a remote server via SSH
-5. **Deploy with image digests**, not mutable tags
-
-It is designed to be reused across multiple services and repositories.
-
-
-## 🔧 Key Features
-
-- 🔁 **Digest-based deployment**
-  Ensures reproducible and rollback-friendly deployments.
-
-- 🔐 **Image signing with Cosign**
-  Adds a security layer to published images.
-
-- 🚀 **Remote deployment via SSH + Docker Compose**
-  No Kubernetes required. Simple, explicit, and transparent.
-
-- 🧪 **Dry-run mode**
-  Run the entire pipeline without pushing or deploying artifacts.
-
-- 📦 **Service-oriented design**
-  One action, many services.
-
-- 🗂 **Monorepo support**
-  Point the build at any subdirectory with `context` and `dockerfile` inputs.
-
-
-## 🗂 Expected docker-compose.yml & .env Structure
-
-This action assumes a **simple and explicit Docker Compose setup**.
-To enable digest-based deployment, your project must follow the structure below.
-
-
-### 1️⃣ docker-compose.yml
-
-Each service image must reference a digest variable defined in `.env`.
+Pin actions to a reviewed commit SHA in production.
 
 ```yaml
-services:
-  portfolio:
-    image: ghcr.io/your-org/portfolio@${PORTFOLIO_IMAGE_DIGEST}
-    restart: unless-stopped
-  ports:
-    - "3000:3000"
-```
+name: Build and deploy
+on:
+  push:
+    branches: [main]
 
-Key points:
-
-* Image tags are **not used directly**
-* Each service reads its image digest from `.env`
-* Service name must match the `service-name` input
-
-
-### 2️⃣ .env
-
-For each service, define an image digest variable following this convention:
-
-```env
-PORTFOLIO_IMAGE_DIGEST=sha256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-Naming rules:
-
-* Based on `service-name`
-* Converted to **UPPER_SNAKE_CASE**
-* `-` and spaces are replaced with `_`
-* Suffix `_IMAGE_DIGEST` is mandatory
-
-Examples:
-
-* service-name: `portfolio` → `PORTFOLIO_IMAGE_DIGEST`
-* service-name: `user-api` → `USER_API_IMAGE_DIGEST`
-
-
-### 3️⃣ How This Action Uses Them
-
-During deployment, the action:
-
-1. Builds and pushes a new Docker image
-2. Resolves the **exact image digest**
-3. Updates the corresponding variable in `.env`
-4. Runs:
-
-```bash
-docker compose up -d --no-deps <service-name>
-```
-
-This ensures:
-
-* Only the target service is restarted
-* The deployment is deterministic
-* Rollbacks are as simple as reverting the digest
-
-
-## 📌 Usage
-
-### Basic Example
-
-```yaml
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # Cosign keyless signing
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Deploy service
-        uses: your-org/docker-service-cd@v1
+      - uses: seheon99/build-and-deploy/build@main
+        id: build
         with:
           registry: ghcr.io/your-org/your-service
+          # Optional: context, dockerfile, build-args, skip-checkout
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: seheon99/build-and-deploy/deploy@main
+        with:
+          image: ${{ needs.build.outputs.image }}
           service-name: portfolio
           ssh-host: ${{ secrets.SSH_HOST }}
           ssh-user: ${{ secrets.SSH_USER }}
           ssh-key: ${{ secrets.SSH_KEY }}
 ```
 
-### Monorepo Example
+Build exposes `image` (`repository@sha256:…`) and `digest` (`sha256:…`).
+Instead of `image`, deploy also accepts:
 
 ```yaml
-jobs:
-  build-frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: your-org/docker-service-cd@v1
-        with:
-          context: frontend        # uses frontend/Dockerfile by default
-          registry: ghcr.io/your-org/repo-frontend
-          service-name: frontend
-          ssh-host: ${{ secrets.SSH_HOST }}
-          ssh-user: ${{ secrets.SSH_USER }}
-          ssh-key: ${{ secrets.SSH_KEY }}
-
-  build-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: your-org/docker-service-cd@v1
-        with:
-          context: backend         # uses backend/Dockerfile by default
-          registry: ghcr.io/your-org/repo-backend
-          service-name: backend
-          ssh-host: ${{ secrets.SSH_HOST }}
-          ssh-user: ${{ secrets.SSH_USER }}
-          ssh-key: ${{ secrets.SSH_KEY }}
+registry: ghcr.io/your-org/your-service
+digest: ${{ needs.build.outputs.digest }}
 ```
 
-### Custom Dockerfile Path
+Retry only the failed deploy job to avoid rebuilding. For a later deployment
+or rollback, call `/deploy` with the registry and a previously published digest.
+Mutable tags are not accepted.
+
+## Inputs
+
+| Action | Required | Optional (default) |
+| --- | --- | --- |
+| `/build` | `registry` | `context` (`.`), `dockerfile` (`{context}/Dockerfile`), `build-args` (newline-separated), `skip-checkout` (`false`) |
+| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`) |
+
+Both accept `dry-run: "true"` without required inputs. Build still builds,
+but skips pushing and signing and leaves outputs empty. Deploy skips SSH.
+
+## Server setup
+
+The SSH user's working directory must contain a Compose file and `.env`.
+Authenticate the server to GHCR beforehand for private images.
 
 ```yaml
-with:
-  context: backend
-  dockerfile: backend/Dockerfile.prod   # explicit override
-  registry: ghcr.io/your-org/repo-backend
-  service-name: backend
-  ...
+services:
+  portfolio:
+    image: ${PORTFOLIO_IMAGE}
 ```
 
-### Build Args
+Deploy sets `PORTFOLIO_IMAGE` and `PORTFOLIO_IMAGE_DIGEST` in `.env`, pulls,
+and runs `docker compose up -d --no-deps --no-build portfolio`.
+Service names map to uppercase variables with hyphens replaced by underscores.
+Names may contain letters, numbers, `_`, and `-`, starting with a letter or number.
+Existing Compose files using `repository@${PORTFOLIO_IMAGE_DIGEST}` still work
+when the repository matches the deployed image. Failed deployments retain
+the requested image in `.env` for retry.
 
-```yaml
-with:
-  context: frontend
-  registry: ghcr.io/your-org/repo-frontend
-  service-name: frontend
-  build-args: |
-    NODE_ENV=production
-    API_BASE_URL=https://api.example.com
-  ...
-```
+## Compatibility
 
+The root action remains the legacy combined build/sign/deploy action with
+unchanged inputs and behavior. To migrate, use `/build` and `/deploy` in
+separate jobs and pass outputs as above. Existing digest-based Compose
+files need no changes. Older release tags do not contain the new sub-actions.
 
-## ⚙️ Inputs
+## Tests
 
-| Name            | Required | Default | Description                                                                        |
-| --------------- | -------- | ------- | ---------------------------------------------------------------------------------- |
-| `skip-checkout` | ❌        | `false` | Skip the repository checkout step                                                  |
-| `dry-run`       | ❌        | `false` | Run pipeline without pushing or deploying                                          |
-| `registry`      | ✅*       | —       | Image name (e.g. `ghcr.io/user/repo`)                                              |
-| `service-name`  | ✅*       | —       | Docker Compose service name                                                        |
-| `ssh-host`      | ✅*       | —       | SSH host for deployment                                                            |
-| `ssh-user`      | ✅*       | —       | SSH username                                                                       |
-| `ssh-key`       | ✅*       | —       | Private SSH key                                                                    |
-| `ssh-port`      | ❌        | `22`    | SSH port                                                                           |
-| `context`       | ❌        | `.`     | Docker build context path (e.g. `frontend`, `backend`)                             |
-| `dockerfile`    | ❌        | —       | Path to Dockerfile. Defaults to `{context}/Dockerfile` when not set.              |
-| `build-args`    | ❌        | —       | Build-time variables passed to `docker/build-push-action`, one `KEY=VALUE` per line. |
-
-✅* Required when `dry-run` is not `true`. In `dry-run` mode these inputs may be omitted.
-
-## 🧪 Dry Run Mode
-
-You can safely validate the pipeline logic without modifying any remote state:
-
-```yaml
-with:
-  dry-run: "true"
-```
-
-In `dry-run` mode:
-
-* Images are built but **not pushed**
-* Images are **not signed**
-* Deployment over SSH is **skipped**
-
-This is useful for testing PRs or validating changes.
-
-
-## 🧠 How Deployment Works
-
-On the remote server, the action:
-
-1. Converts `service-name` into an environment-safe variable
-   (e.g. `portfolio-api` → `PORTFOLIO_API_IMAGE_DIGEST`)
-2. Updates the `.env` file with the new image digest
-3. Runs:
-
-```bash
-docker compose up -d --no-deps <service>
-```
-
-This allows:
-
-* Minimal restarts
-* Service-scoped deployments
-* Easy rollback by reverting the digest
+With Python 3 and PyYAML installed:
+`python3 -m unittest discover -s tests`.
