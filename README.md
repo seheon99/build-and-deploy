@@ -98,7 +98,8 @@ env-file: config/production.env
 Relative file paths resolve from `deploy-directory` (itself relative to the
 SSH login directory unless absolute). The directory and env file must exist.
 Omit `compose-file` for default discovery. Paths inside Compose files follow
-normal Compose rules.
+normal Compose rules. Store private paths in GitHub Secrets; the action also
+masks their encoded forms in logs.
 
 ## Compatibility
 

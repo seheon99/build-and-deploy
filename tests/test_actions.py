@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 import subprocess
@@ -37,6 +38,24 @@ class ActionsTest(unittest.TestCase):
             self.assertIn('image=' + IMAGE, output)
             self.assertIn('digest=' + DIGEST, output)
             self.assertIn('variable=USER_API', output)
+
+    def test_encoded_paths_are_masked_and_remain_available(self):
+        paths = {'DEPLOY_DIRECTORY': "/srv/private app's",
+                 'COMPOSE_FILE': 'config/production.yml',
+                 'ENV_FILE': 'config/private.env'}
+        result, output = self.resolve(**paths)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = dict(line.split('=', 1) for line in output.splitlines())
+        masks = result.stdout.splitlines()
+        self.assertEqual(len(masks), 3)
+        for key, value in paths.items():
+            encoded = base64.b64encode(value.encode()).decode()
+            self.assertIn('::add-mask::' + encoded, masks)
+            self.assertEqual(outputs[key.lower()], encoded)
+            self.assertNotIn(value, result.stdout)
+        result, _ = self.resolve()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('::add-mask::', result.stdout.splitlines())
 
     def test_invalid_inputs(self):
         for inputs in ({'IMAGE': 'ghcr.io/example/app:latest'},

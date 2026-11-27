@@ -88,7 +88,11 @@ runs:
         echo "variable=$VARIABLE" >> "$GITHUB_OUTPUT"
         # Encode paths so quotes and shell metacharacters remain data in the SSH script.
         for key in DEPLOY_DIRECTORY COMPOSE_FILE ENV_FILE; do
-          echo "${key,,}=$(printf '%s' "${!key}" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          encoded=$(printf '%s' "${!key}" | base64 -w0)
+          if [[ -n "$encoded" ]]; then
+            echo "::add-mask::$encoded"
+          fi
+          echo "${key,,}=$encoded" >> "$GITHUB_OUTPUT"
         done
 
     - name: Deploy over SSH
