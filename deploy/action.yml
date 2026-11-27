@@ -27,6 +27,18 @@ inputs:
     required: false
     default: "22"
     description: SSH port
+  deploy-directory:
+    required: false
+    default: "."
+    description: Remote deployment directory, relative to the SSH login directory or absolute
+  compose-file:
+    required: false
+    default: ""
+    description: Remote Compose file, relative to deploy-directory or absolute; empty uses Compose discovery
+  env-file:
+    required: false
+    default: ".env"
+    description: Remote environment file, relative to deploy-directory or absolute
   dry-run:
     required: false
     default: "false"
@@ -47,6 +59,9 @@ runs:
         SSH_HOST: ${{ inputs.ssh-host }}
         SSH_USER: ${{ inputs.ssh-user }}
         SSH_KEY: ${{ inputs.ssh-key }}
+        DEPLOY_DIRECTORY: ${{ inputs.deploy-directory }}
+        COMPOSE_FILE: ${{ inputs.compose-file }}
+        ENV_FILE: ${{ inputs.env-file }}
       run: |
         if [[ -z "$IMAGE" ]]; then
           IMAGE="${REGISTRY}@${DIGEST}"
@@ -71,6 +86,10 @@ runs:
         echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
         echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         echo "variable=$VARIABLE" >> "$GITHUB_OUTPUT"
+        # Encode paths so quotes and shell metacharacters remain data in the SSH script.
+        for key in DEPLOY_DIRECTORY COMPOSE_FILE ENV_FILE; do
+          echo "${key,,}=$(printf '%s' "${!key}" | base64 -w0)" >> "$GITHUB_OUTPUT"
+        done
 
     - name: Deploy over SSH
       if: inputs.dry-run != 'true'
@@ -82,14 +101,22 @@ runs:
         port: ${{ inputs.ssh-port }}
         script: |
           set -eu
-          test -f .env
+          DEPLOY_DIRECTORY=$(printf '%s' '${{ steps.image.outputs.deploy_directory }}' | base64 -d)
+          COMPOSE_FILE=$(printf '%s' '${{ steps.image.outputs.compose_file }}' | base64 -d)
+          ENV_FILE=$(printf '%s' '${{ steps.image.outputs.env_file }}' | base64 -d)
+          cd -- "$DEPLOY_DIRECTORY"
+          test -f "$ENV_FILE"
           for entry in '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}'; do
             key=${entry%%=*}
-            if grep -q "^${key}=" .env; then
-              sed -i "s|^${key}=.*|${entry}|" .env
+            if grep -q -- "^${key}=" "$ENV_FILE"; then
+              sed -i "s|^${key}=.*|${entry}|" -- "$ENV_FILE"
             else
-              printf '\n%s\n' "$entry" >> .env
+              printf '\n%s\n' "$entry" >> "$ENV_FILE"
             fi
           done
-          docker compose pull '${{ inputs.service-name }}'
-          docker compose up -d --no-deps --no-build '${{ inputs.service-name }}'
+          set -- docker compose --env-file "$ENV_FILE"
+          if [ -n "$COMPOSE_FILE" ]; then
+            set -- "$@" -f "$COMPOSE_FILE"
+          fi
+          "$@" pull '${{ inputs.service-name }}'
+          "$@" up -d --no-deps --no-build '${{ inputs.service-name }}'

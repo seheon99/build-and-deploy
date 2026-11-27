@@ -61,14 +61,14 @@ Mutable tags are not accepted.
 | Action | Required | Optional (default) |
 | --- | --- | --- |
 | `/build` | `registry` | `context` (`.`), `dockerfile` (`{context}/Dockerfile`), `build-args` (newline-separated), `skip-checkout` (`false`) |
-| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`) |
+| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `deploy-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
 
 Both accept `dry-run: "true"` without required inputs. Build still builds,
 but skips pushing and signing and leaves outputs empty. Deploy skips SSH.
 
 ## Server setup
 
-The SSH user's working directory must contain a Compose file and `.env`.
+By default, the SSH user's working directory must contain a Compose file and `.env`.
 Authenticate the server to GHCR beforehand for private images.
 
 ```yaml
@@ -84,6 +84,33 @@ Names may contain letters, numbers, `_`, and `-`, starting with a letter or numb
 Existing Compose files using `repository@${PORTFOLIO_IMAGE_DIGEST}` still work
 when the repository matches the deployed image. Failed deployments retain
 the requested image in `.env` for retry.
+
+### Custom remote paths
+
+```yaml
+- uses: seheon99/build-and-deploy/deploy@main
+  with:
+    image: ${{ needs.build.outputs.image }}
+    service-name: portfolio
+    ssh-host: ${{ secrets.SSH_HOST }}
+    ssh-user: ${{ secrets.SSH_USER }}
+    ssh-key: ${{ secrets.SSH_KEY }}
+    deploy-directory: /srv/portfolio
+    compose-file: config/compose.production.yml
+    env-file: config/production.env
+```
+
+`deploy-directory` is absolute or relative to the SSH login working directory.
+The directory and environment file must already exist. Relative `compose-file`
+and `env-file` paths resolve from that deployment directory; absolute paths
+are used as supplied. In this example, deployment updates
+`/srv/portfolio/config/production.env` and runs both Compose commands from
+`/srv/portfolio` with `--env-file config/production.env` and
+`-f config/compose.production.yml`.
+
+Leave `compose-file` empty to keep Docker Compose's default file discovery.
+Paths inside the Compose file (such as bind mounts and build contexts) retain
+Compose's normal resolution relative to the Compose file's directory.
 
 ## Compatibility
 
