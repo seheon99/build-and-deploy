@@ -1,5 +1,6 @@
 import base64
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -38,6 +39,7 @@ class ActionsTest(unittest.TestCase):
             self.assertIn('image=' + IMAGE, output)
             self.assertIn('digest=' + DIGEST, output)
             self.assertIn('variable=USER_API', output)
+            self.assertIn('service_name=user-api', output)
 
     def test_encoded_paths_are_masked_and_remain_available(self):
         paths = {'WORKING_DIRECTORY': "/srv/private app's",
@@ -88,7 +90,11 @@ class ActionsTest(unittest.TestCase):
                                check=True)
             self.assertEqual([line for line in (directory / '.env').read_text().splitlines() if line],
                              ['OTHER=keep', f'USER_API_IMAGE_DIGEST={DIGEST}', f'USER_API_IMAGE={IMAGE}'])
-            self.assertEqual((directory / 'docker.log').read_text().splitlines(),
+            log = (directory / 'docker.log').read_text().splitlines()
+            validations = log[::3]
+            self.assertTrue(all(line.startswith('compose --env-file .env.') and
+                                line.endswith(' config --quiet') for line in validations))
+            self.assertEqual([line for line in log if not line.endswith(' config --quiet')],
                              ['compose --env-file .env pull user-api',
                               'compose --env-file .env up -d --no-deps --no-build user-api'] * 2)
 
@@ -130,7 +136,12 @@ class ActionsTest(unittest.TestCase):
                 prefix = [str(deploy), 'compose', '--env-file',
                           str(env_file) if absolute else env_path, '-f',
                           str(compose_file) if absolute else 'config/compose production.yml']
-                self.assertEqual((root / 'docker.log').read_text().splitlines(),
+                log = (root / 'docker.log').read_text().splitlines()
+                candidate_prefix = prefix.copy()
+                candidate_prefix[3] = log[3]
+                self.assertTrue(log[3].startswith(prefix[3] + '.'))
+                self.assertEqual(log,
+                                 candidate_prefix + ['config', '--quiet'] +
                                  prefix + ['pull', 'user-api'] + prefix +
                                  ['up', '-d', '--no-deps', '--no-build', 'user-api'])
 
@@ -154,6 +165,88 @@ class ActionsTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((directory / 'docker-called').exists())
                 self.assertEqual((directory / '.env').read_text(), 'USER_API_IMAGE_DIGEST=old\n')
+
+    def test_missing_digest_and_invalid_compose_preserve_environment(self):
+        for original, failure in [('OTHER=keep\n', ''),
+                                  ('USER_API_IMAGE_DIGEST=old\n', 'config'),
+                                  ('USER_API_IMAGE_DIGEST=old\n', 'pull'),
+                                  ('USER_API_IMAGE_DIGEST=old\n', 'up')]:
+            with self.subTest(original=original, failure=failure), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                (directory / '.env').write_text(original)
+                docker = directory / 'docker'
+                docker.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> docker.log\n'
+                                  'case " $* " in *" $FAIL "*) exit 42;; esac\n')
+                docker.chmod(0o755)
+                result, output = self.resolve()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                script = self.deploy['runs']['steps'][1]['with']['script']
+                for key, value in (line.split('=', 1) for line in output.splitlines()):
+                    script = script.replace('${{ steps.image.outputs.' + key + ' }}', value)
+                script = script.replace('${{ inputs.service-name }}', 'user-api')
+                result = subprocess.run(['sh', '-c', script], cwd=directory,
+                                        env=dict(os.environ, PATH=str(directory) + ':' + os.environ['PATH'],
+                                                 FAIL=failure), capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                if failure in ('', 'config'):
+                    self.assertEqual((directory / '.env').read_text(), original)
+                self.assertEqual(list(directory.glob('.env.*')), [])
+                log = (directory / 'docker.log').read_text() if (directory / 'docker.log').exists() else ''
+                if not failure:
+                    self.assertIn('USER_API_IMAGE_DIGEST', result.stderr)
+                    self.assertEqual(log, '')
+                elif failure == 'config':
+                    self.assertNotIn(' pull ', log)
+                    self.assertNotIn(' up ', log)
+                elif failure == 'pull':
+                    self.assertNotIn(' up ', log)
+
+    @unittest.skipUnless(shutil.which('docker'), 'Docker CLI unavailable')
+    def test_real_compose_validates_candidate_before_commit(self):
+        docker_path = shutil.which('docker')
+        for valid, service in ((False, 'user-api'), (True, 'user-api'), (True, '1api')):
+            with self.subTest(valid=valid, service=service), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                variable = service.upper().replace('-', '_') + '_IMAGE_DIGEST'
+                original = variable + '=old\n'
+                (directory / '.env').write_text(original)
+                (directory / 'compose.yaml').write_text(
+                    f'services:\n  {service}:\n'
+                    '    image: ' + (IMAGE if service[0].isdigit() else
+                                     'ghcr.io/example/app@${' + variable + '}') + '\n' +
+                    ('    env_file: .env\n' if valid else '    invalid_property: true\n'))
+                docker = directory / 'docker'
+                docker.write_text('#!/bin/sh\ncase " $* " in *" config "*)\n'
+                                  '  "$REAL_DOCKER" "$@" || exit $?\n'
+                                  '  "$REAL_DOCKER" compose --env-file "$3" config --images > validated-image\n'
+                                  '  ;;\n*) touch deployed;;\nesac\n')
+                docker.chmod(0o755)
+                result, output = self.resolve(SERVICE_NAME=service)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                script = self.deploy['runs']['steps'][1]['with']['script']
+                for key, value in (line.split('=', 1) for line in output.splitlines()):
+                    script = script.replace('${{ steps.image.outputs.' + key + ' }}', value)
+                result = subprocess.run(['sh', '-c', script], cwd=directory,
+                                        env=dict(os.environ, PATH=str(directory) + ':' + os.environ['PATH'],
+                                                 REAL_DOCKER=docker_path, USER_API_IMAGE_DIGEST='stale'),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, valid, result.stderr)
+                self.assertEqual((directory / 'deployed').exists(), valid)
+                if valid:
+                    self.assertEqual((directory / 'validated-image').read_text().strip(), IMAGE)
+                    self.assertIn(DIGEST, (directory / '.env').read_text())
+                else:
+                    self.assertEqual((directory / '.env').read_text(), original)
+                self.assertEqual(list(directory.glob('.env.*')), [])
+
+    def test_legacy_entry_point_uses_hardened_deployment(self):
+        legacy = yaml.safe_load((ROOT / 'action.yml').read_text())['runs']['steps']
+        resolve = next(step for step in legacy if step.get('id') == 'image')
+        remote = next(step for step in legacy if 'ssh-action' in step.get('uses', ''))
+        self.assertEqual(resolve['run'], self.deploy['runs']['steps'][0]['run'])
+        self.assertEqual(remote['with']['script'], self.deploy['runs']['steps'][1]['with']['script'])
+        validation = legacy[0]
+        self.assertNotIn('${{', validation['run'])
 
     def test_action_boundaries(self):
         build = yaml.safe_load((ROOT / 'build/action.yml').read_text())

@@ -111,3 +111,17 @@ files need no changes. Older release tags do not contain the new sub-actions.
 
 With Python 3 and PyYAML installed:
 `python3 -m unittest discover -s tests`.
+
+### Remote deployment validation
+
+Both deployment entry points require the target `<SERVICE>_IMAGE_DIGEST` assignment
+in the existing environment file. A missing variable fails deployment explicitly.
+The action updates a temporary copy next to that file and runs
+`docker compose --env-file <candidate> config --quiet` before replacing the original.
+Validation failure leaves the original file intact and removes the temporary copy.
+Only after validation succeeds does the action replace the file, pull the image,
+and update the target service. Remote command failures fail the Actions job.
+A pull or service update failure after validation does not roll back the environment
+file or running containers.
+
+Run the regression tests with `python3 -m unittest discover -s tests` (requires PyYAML).
