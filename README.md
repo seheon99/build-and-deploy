@@ -46,12 +46,38 @@ Pin actions to a reviewed commit SHA in production.
 
 ## Inputs
 
-| Action | Required | Optional (default) |
-| --- | --- | --- |
-| `/build` | `registry` | `context` (`.`), `dockerfile` (`{context}/Dockerfile`), `build-args` (newline-separated), `skip-checkout` (`false`) |
-| `/deploy` | `image` or `registry` + `digest`, `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `working-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
+### Build
 
-Both accept `dry-run: "true"` (default: `false`). Build skips pushing and signing and returns empty outputs; deploy skips SSH.
+| Input | Required | Default | Description |
+| --- | :---: | --- | --- |
+| `registry` | Yes | | Image repository |
+| `context` | No | `.` | Docker build context |
+| `dockerfile` | No | `{context}/Dockerfile` | Dockerfile path |
+| `build-args` | No | | Build arguments, one `KEY=VALUE` per line |
+| `skip-checkout` | No | `false` | Skip repository checkout |
+| `dry-run` | No | `false` | Build without pushing or signing |
+
+### Deploy
+
+| Input | Required | Default | Description |
+| --- | :---: | --- | --- |
+| `image` | Conditional | | Full image reference (`repository@sha256:…`) |
+| `registry` | Conditional | | Image repository |
+| `digest` | Conditional | | Published SHA-256 digest |
+| `service-name` | Yes | | Docker Compose service name |
+| `ssh-host` | Yes | | SSH host |
+| `ssh-user` | Yes | | SSH username |
+| `ssh-key` | Yes | | SSH private key |
+| `ssh-port` | No | `22` | SSH port |
+| `working-directory` | No | `.` | Remote deployment directory |
+| `compose-file` | No | Auto-discovery | Compose file path |
+| `env-file` | No | `.env` | Environment file path |
+| `dry-run` | No | `false` | Skip SSH deployment |
+
+Provide either `image` or both `registry` and `digest`.
+
+Required inputs are only enforced when `dry-run` is false.
+Build outputs are empty in dry-run mode.
 
 ## Server Setup
 
