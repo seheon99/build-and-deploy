@@ -27,18 +27,18 @@ inputs:
     required: false
     default: "22"
     description: SSH port
-  deploy-directory:
+  working-directory:
     required: false
     default: "."
     description: Remote deployment directory, relative to the SSH login directory or absolute
   compose-file:
     required: false
     default: ""
-    description: Remote Compose file, relative to deploy-directory or absolute; empty uses Compose discovery
+    description: Remote Compose file, relative to working-directory or absolute; empty uses Compose discovery
   env-file:
     required: false
     default: ".env"
-    description: Remote environment file, relative to deploy-directory or absolute
+    description: Remote environment file, relative to working-directory or absolute
   dry-run:
     required: false
     default: "false"
@@ -59,7 +59,7 @@ runs:
         SSH_HOST: ${{ inputs.ssh-host }}
         SSH_USER: ${{ inputs.ssh-user }}
         SSH_KEY: ${{ inputs.ssh-key }}
-        DEPLOY_DIRECTORY: ${{ inputs.deploy-directory }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
         COMPOSE_FILE: ${{ inputs.compose-file }}
         ENV_FILE: ${{ inputs.env-file }}
       run: |
@@ -87,7 +87,7 @@ runs:
         echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         echo "variable=$VARIABLE" >> "$GITHUB_OUTPUT"
         # Encode paths so quotes and shell metacharacters remain data in the SSH script.
-        for key in DEPLOY_DIRECTORY COMPOSE_FILE ENV_FILE; do
+        for key in WORKING_DIRECTORY COMPOSE_FILE ENV_FILE; do
           encoded=$(printf '%s' "${!key}" | base64 -w0)
           if [[ -n "$encoded" ]]; then
             echo "::add-mask::$encoded"
@@ -105,10 +105,10 @@ runs:
         port: ${{ inputs.ssh-port }}
         script: |
           set -eu
-          DEPLOY_DIRECTORY=$(printf '%s' '${{ steps.image.outputs.deploy_directory }}' | base64 -d)
+          WORKING_DIRECTORY=$(printf '%s' '${{ steps.image.outputs.working_directory }}' | base64 -d)
           COMPOSE_FILE=$(printf '%s' '${{ steps.image.outputs.compose_file }}' | base64 -d)
           ENV_FILE=$(printf '%s' '${{ steps.image.outputs.env_file }}' | base64 -d)
-          cd -- "$DEPLOY_DIRECTORY"
+          cd -- "$WORKING_DIRECTORY"
           test -f "$ENV_FILE"
           for entry in '${{ steps.image.outputs.variable }}_IMAGE_DIGEST=${{ steps.image.outputs.digest }}' '${{ steps.image.outputs.variable }}_IMAGE=${{ steps.image.outputs.image }}'; do
             key=${entry%%=*}

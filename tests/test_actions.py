@@ -22,7 +22,7 @@ class ActionsTest(unittest.TestCase):
             output = Path(directory) / 'output'
             env = dict(os.environ, IMAGE=IMAGE, REGISTRY='', DIGEST='',
                        SERVICE_NAME='user-api', SSH_HOST='host', SSH_USER='user',
-                       SSH_KEY='key', DEPLOY_DIRECTORY='.', COMPOSE_FILE='', ENV_FILE='.env',
+                       SSH_KEY='key', WORKING_DIRECTORY='.', COMPOSE_FILE='', ENV_FILE='.env',
                        GITHUB_OUTPUT=str(output))
             env.update(overrides)
             result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c',
@@ -40,7 +40,7 @@ class ActionsTest(unittest.TestCase):
             self.assertIn('variable=USER_API', output)
 
     def test_encoded_paths_are_masked_and_remain_available(self):
-        paths = {'DEPLOY_DIRECTORY': "/srv/private app's",
+        paths = {'WORKING_DIRECTORY': "/srv/private app's",
                  'COMPOSE_FILE': 'config/production.yml',
                  'ENV_FILE': 'config/private.env'}
         result, output = self.resolve(**paths)
@@ -109,7 +109,7 @@ class ActionsTest(unittest.TestCase):
                 docker.chmod(0o755)
                 compose_file = deploy / 'config/compose production.yml'
                 result, output = self.resolve(
-                    DEPLOY_DIRECTORY=str(deploy) if absolute else deploy.name,
+                    WORKING_DIRECTORY=str(deploy) if absolute else deploy.name,
                     COMPOSE_FILE=str(compose_file) if absolute else 'config/compose production.yml',
                     ENV_FILE=str(env_file) if absolute else env_path)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -135,7 +135,7 @@ class ActionsTest(unittest.TestCase):
                                  ['up', '-d', '--no-deps', '--no-build', 'user-api'])
 
     def test_missing_remote_paths_stop_before_docker(self):
-        for overrides in ({'DEPLOY_DIRECTORY': 'missing'}, {'ENV_FILE': 'missing.env'}):
+        for overrides in ({'WORKING_DIRECTORY': 'missing'}, {'ENV_FILE': 'missing.env'}):
             with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 (directory / '.env').write_text('USER_API_IMAGE_DIGEST=old\n')

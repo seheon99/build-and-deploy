@@ -61,7 +61,7 @@ Mutable tags are not accepted.
 | Action | Required | Optional (default) |
 | --- | --- | --- |
 | `/build` | `registry` | `context` (`.`), `dockerfile` (`{context}/Dockerfile`), `build-args` (newline-separated), `skip-checkout` (`false`) |
-| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `deploy-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
+| `/deploy` | `image` or `registry` + `digest`; `service-name`, `ssh-host`, `ssh-user`, `ssh-key` | `ssh-port` (`22`), `working-directory` (`.`), `compose-file` (Compose discovery), `env-file` (`.env`) |
 
 Both accept `dry-run: "true"` without required inputs. Build still builds,
 but skips pushing and signing and leaves outputs empty. Deploy skips SSH.
@@ -89,12 +89,12 @@ the requested image in `.env` for retry.
 
 ```yaml
 with:
-  deploy-directory: /srv/portfolio
+  working-directory: /srv/portfolio
   compose-file: config/compose.production.yml
   env-file: config/production.env
 ```
 
-Relative file paths resolve from `deploy-directory` (itself relative to the
+Relative file paths resolve from `working-directory` (itself relative to the
 SSH login directory unless absolute). The directory and env file must exist.
 Omit `compose-file` for default discovery. Paths inside Compose files follow
 normal Compose rules. Store private paths in GitHub Secrets; the action also
