@@ -87,30 +87,18 @@ the requested image in `.env` for retry.
 
 ### Custom remote paths
 
+Add these to the deploy step's `with`:
+
 ```yaml
-- uses: seheon99/build-and-deploy/deploy@main
-  with:
-    image: ${{ needs.build.outputs.image }}
-    service-name: portfolio
-    ssh-host: ${{ secrets.SSH_HOST }}
-    ssh-user: ${{ secrets.SSH_USER }}
-    ssh-key: ${{ secrets.SSH_KEY }}
-    deploy-directory: /srv/portfolio
-    compose-file: config/compose.production.yml
-    env-file: config/production.env
+deploy-directory: /srv/portfolio
+compose-file: config/compose.production.yml
+env-file: config/production.env
 ```
 
-`deploy-directory` is absolute or relative to the SSH login working directory.
-The directory and environment file must already exist. Relative `compose-file`
-and `env-file` paths resolve from that deployment directory; absolute paths
-are used as supplied. In this example, deployment updates
-`/srv/portfolio/config/production.env` and runs both Compose commands from
-`/srv/portfolio` with `--env-file config/production.env` and
-`-f config/compose.production.yml`.
-
-Leave `compose-file` empty to keep Docker Compose's default file discovery.
-Paths inside the Compose file (such as bind mounts and build contexts) retain
-Compose's normal resolution relative to the Compose file's directory.
+Relative file paths resolve from `deploy-directory` (itself relative to the
+SSH login directory unless absolute). The directory and env file must exist.
+Omit `compose-file` for default discovery. Paths inside Compose files follow
+normal Compose rules.
 
 ## Compatibility
 
